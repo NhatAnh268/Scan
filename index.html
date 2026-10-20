@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Tra vùng">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Tra cứu vùng theo barcode</title>
+<style>
+  :root{--bg:#f3f5f7;--card:#fff;--text:#14202b;--muted:#64748b;--primary:#0f766e;--ok:#16a34a;--bad:#dc2626;--line:#e2e8f0}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);
+    padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+  header{background:var(--primary);color:#fff;padding:14px 16px;display:flex;align-items:center;justify-content:space-between}
+  header h1{font-size:18px;margin:0}
+  header button{background:rgba(255,255,255,.18);color:#fff;border:0;border-radius:8px;padding:8px 10px;font-size:13px}
+  main{max-width:560px;margin:0 auto;padding:14px}
+  .card{background:var(--card);border-radius:14px;padding:14px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+  label{display:block;font-size:13px;color:var(--muted);margin-bottom:6px}
+  select,input[type=text],input[type=search]{width:100%;font-size:18px;padding:12px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--text)}
+  .row{display:flex;gap:8px}
+  .row>*{flex:1}
+  button.btn{font-size:16px;font-weight:600;padding:13px;border:0;border-radius:10px;background:var(--primary);color:#fff}
+  button.btn.sec{background:#e2e8f0;color:var(--text)}
+  button.btn:disabled{opacity:.5}
+  #reader{width:100%;border-radius:10px;overflow:hidden;margin-top:10px}
+  #result{border-left:8px solid var(--line)}
+  #result.ok{border-left-color:var(--ok)}
+  #result.bad{border-left-color:var(--bad)}
+  .code{font-family:ui-monospace,Menlo,monospace;color:var(--muted);font-size:14px;word-break:break-all}
+  .big{font-size:30px;font-weight:800;line-height:1.15;margin:6px 0}
+  .big small{display:block;font-size:13px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+  .extra{font-size:15px;margin-top:8px}
+  .extra b{color:var(--muted);font-weight:600}
+  .bad-msg{font-size:20px;font-weight:700;color:var(--bad)}
+  .hist{list-style:none;margin:0;padding:0}
+  .hist li{display:flex;justify-content:space-between;gap:8px;padding:9px 0;border-bottom:1px solid var(--line);font-size:14px}
+  .hist li:last-child{border:0}
+  .hist .r{text-align:right;font-weight:600}
+  .hist .r.x{color:var(--bad)}
+  .status{font-size:12px;color:var(--muted);text-align:center;padding:6px 14px 20px}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>Tra cứu vùng theo barcode</h1>
+  <button id="btnData">Dữ liệu</button>
+</header>
+
+<main>
+  <div class="card">
+    <label for="unit">Đơn vị làm việc</label>
+    <select id="unit"></select>
+  </div>
+
+  <div class="card">
+    <label for="code">Barcode</label>
+    <input id="code" type="search" inputmode="text" autocomplete="off" autocapitalize="off" placeholder="Gõ hoặc dùng máy quét rồi Enter">
+    <div class="row" style="margin-top:10px">
+      <button class="btn" id="btnLookup">Tra cứu</button>
+      <button class="btn sec" id="btnScan">📷 Quét camera</button>
+    </div>
+    <label id="contWrap" style="display:flex;align-items:center;gap:8px;margin:12px 0 0;font-size:14px;color:var(--text)">
+      <input type="checkbox" id="cont" checked style="width:20px;height:20px"> Quét liên tục (không tắt camera sau mỗi mã)
+    </label>
+    <div id="reader" class="hidden"></div>
+    <button class="btn sec hidden" id="btnTorch" style="width:100%;margin-top:8px">🔦 Bật đèn pin</button>
+  </div>
+
+  <div id="result" class="card hidden"></div>
+
+  <div class="card hidden" id="histCard">
+    <label>Lịch sử quét gần đây</label>
+    <ul class="hist" id="hist"></ul>
+  </div>
+
+  <div id="dataPanel" class="card hidden">
+    <label>Cập nhật dữ liệu từ file Excel (.xlsx) hoặc .csv</label>
+    <input type="file" id="file" accept=".xlsx,.xls,.csv">
+    <p class="status" id="dataInfo" style="text-align:left;padding:8px 0 0"></p>
+  </div>
+</main>
+
+<div class="status" id="status"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script>
+/* ===== Dữ liệu mẫu dự phòng (khi chưa có data.xlsx) ===== */
+const SAMPLE = {
+  "Bưu cục A": [
+    {"Barcode":"893100000001","Vùng":"Vùng 1","Vị trí":"Kệ A-01","Ghi chú":"Hàng nhẹ"},
+    {"Barcode":"893100000002","Vùng":"Vùng 2","Vị trí":"Kệ B-05","Ghi chú":""},
+    {"Barcode":"8932*","Vùng":"Vùng 3","Vị trí":"Kệ C (theo đầu mã)","Ghi chú":"Quy tắc đầu mã 8932"}
+  ],
+  "Bưu cục B": [
+    {"Barcode":"893100000001","Vùng":"Vùng 5","Vị trí":"Ô 12","Ghi chú":"Cùng mã nhưng khác đơn vị"}
+  ]
+};
+
+const LS_KEY = "barcode_data_v1";
+const LS_UNIT = "barcode_unit_v1";
+const $ = id => document.getElementById(id);
+let DB = {};          // { donVi: { exact: Map, prefixes: [ [prefix,row] ] } }
+let META = {updated:"", source:""};
+let scanner = null, scanning = false;
+const history = [];
+
+/* ===== Chuẩn hoá tên cột ===== */
+const norm = s => String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/đ/gi,"d").toLowerCase().replace(/[^a-z0-9]/g,"");
+const COL = { code:["barcode","mavach","ma","code","mavandon","mabuugui"], vung:["vung","khuvuc","zone","tuyen"], vitri:["vitri","ke","oke","location","position","bin"] };
+function pick(row, names){
+  for(const k of Object.keys(row)){ if(names.includes(norm(k))) return k; }
+  return null;
+}
+
+/* ===== Dựng chỉ mục tra cứu ===== */
+function build(raw){
+  const db = {};
+  for(const [unit, rows] of Object.entries(raw)){
+    const exact = new Map(), prefixes = [];
+    for(const row of rows){
+      const kc = pick(row, COL.code); if(!kc) continue;
+      const code = String(row[kc]).trim(); if(!code) continue;
+      const kv = pick(row, COL.vung), kp = pick(row, COL.vitri);
+      const extras = [];
+      for(const k of Object.keys(row)){
+        if(k===kc||k===kv||k===kp) continue;
+        const v = String(row[k]).trim(); if(v) extras.push([k,v]);
+      }
+      const rec = {vung: kv? String(row[kv]).trim():"", vitri: kp? String(row[kp]).trim():"", extras};
+      if(code.endsWith("*")) prefixes.push([code.slice(0,-1), rec]); else exact.set(code, rec);
+    }
+    prefixes.sort((a,b)=>b[0].length-a[0].length); // đầu mã dài nhất ưu tiên
+    db[unit] = {exact, prefixes};
+  }
+  return db;
+}
+
+function parseWorkbook(wb){
+  const raw = {};
+  for(const name of wb.SheetNames){
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], {defval:"", raw:false});
+    if(rows.length) raw[name.trim()] = rows;
+  }
+  return raw;
+}
+
+function setData(raw, source){
+  DB = build(raw);
+  META = {updated:new Date().toLocaleString("vi-VN"), source};
+  try{ localStorage.setItem(LS_KEY, JSON.stringify({raw, meta:META})); }catch(e){ console.warn("Không lưu được offline", e); }
+  renderUnits();
+  renderInfo();
+}
+
+function renderInfo(){
+  const total = Object.values(DB).reduce((n,u)=>n+u.exact.size+u.prefixes.length,0);
+  $("dataInfo").textContent = `Nguồn: ${META.source} • ${Object.keys(DB).length} đơn vị • ${total} dòng • cập nhật ${META.updated}`;
+  $("status").textContent = `Dữ liệu: ${META.source} (${META.updated})`;
+}
+
+function renderUnits(){
+  const sel = $("unit"), keep = localStorage.getItem(LS_UNIT);
+  sel.innerHTML = "";
+  for(const u of Object.keys(DB)){ const o=document.createElement("option"); o.value=o.textContent=u; sel.appendChild(o); }
+  if(keep && DB[keep]) sel.value = keep;
+}
+
+/* ===== Tra cứu ===== */
+function lookup(unit, code){
+  const u = DB[unit]; if(!u) return null;
+  if(u.exact.has(code)) return {rec:u.exact.get(code), by:"khớp mã"};
+  for(const [p,rec] of u.prefixes){ if(code.startsWith(p)) return {rec, by:`đầu mã ${p}`}; }
+  return null;
+}
+const esc = s => String(s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function doLookup(code){
+  code = String(code||"").trim();
+  if(!code) return;
+  const unit = $("unit").value;
+  const hit = lookup(unit, code);
+  const box = $("result");
+  box.classList.remove("hidden","ok","bad");
+  if(hit){
+    box.classList.add("ok");
+    const {rec} = hit;
+    box.innerHTML =
+      `<div class="code">${esc(code)} • ${esc(unit)}</div>`+
+      (rec.vung?`<div class="big"><small>Vùng</small>${esc(rec.vung)}</div>`:"")+
+      (rec.vitri?`<div class="big"><small>Vị trí</small>${esc(rec.vitri)}</div>`:"")+
+      rec.extras.map(([k,v])=>`<div class="extra"><b>${esc(k)}:</b> ${esc(v)}</div>`).join("");
+    if(navigator.vibrate) navigator.vibrate(60);
+  }else{
+    box.classList.add("bad");
+    box.innerHTML = `<div class="code">${esc(code)} • ${esc(unit)}</div><div class="bad-msg">Không tìm thấy mã này</div>`+
+      `<div class="extra">Kiểm tra lại đơn vị đã chọn hoặc dữ liệu Excel.</div>`;
+    if(navigator.vibrate) navigator.vibrate([80,60,80]);
+  }
+  history.unshift({code, unit, text: hit? [hit.rec.vung,hit.rec.vitri].filter(Boolean).join(" · ") : "Không có", ok:!!hit});
+  if(history.length>20) history.pop();
+  renderHist();
+  $("code").value = "";
+}
+
+function renderHist(){
+  $("histCard").classList.toggle("hidden", !history.length);
+  $("hist").innerHTML = history.map(h=>`<li><span class="code">${esc(h.code)}</span><span class="r ${h.ok?"":"x"}">${esc(h.text)}</span></li>`).join("");
+}
+
+/* ===== Quét camera ===== */
+let lastCode = "", lastTime = 0, torchOn = false;
+
+async function startScan(){
+  if(scanning) return stopScan();
+  $("reader").classList.remove("hidden");
+  const F = Html5QrcodeSupportedFormats;
+  // Chỉ dò các loại mã vạch hay dùng -> nhanh hơn dò tất cả
+  scanner = new Html5Qrcode("reader", {
+    verbose:false,
+    formatsToSupport:[F.CODE_128, F.EAN_13, F.EAN_8, F.CODE_39, F.UPC_A, F.UPC_E, F.ITF, F.CODABAR, F.QR_CODE],
+    experimentalFeatures:{ useBarCodeDetectorIfSupported:true } // dùng bộ dò gốc của máy (rất nhanh) nếu có
+  });
+  try{
+    await scanner.start(
+      { facingMode:"environment" },
+      {
+        fps:30,
+        // khung quét hình chữ nhật rộng, hợp mã vạch ngang
+        qrbox:(w,h)=>({ width:Math.floor(w*0.92), height:Math.max(80, Math.floor(h*0.45)) }),
+        disableFlip:true,
+        videoConstraints:{
+          facingMode:"environment",
+          width:{ideal:1920}, height:{ideal:1080},
+          advanced:[{focusMode:"continuous"}]
+        }
+      },
+      text => {
+        const now = Date.now();
+        if(text === lastCode && now - lastTime < 2500) return; // bỏ qua quét trùng liên tiếp
+        lastCode = text; lastTime = now;
+        doLookup(text);
+        if(!$("cont").checked) stopScan();
+      },
+      () => {}
+    );
+    scanning = true; $("btnScan").textContent = "✖ Dừng quét";
+    try{ await scanner.applyVideoConstraints({ advanced:[{focusMode:"continuous"}] }); }catch(_){}
+    try{
+      const caps = scanner.getRunningTrackCapabilities();
+      $("btnTorch").classList.toggle("hidden", !(caps && caps.torch));
+    }catch(_){}
+  }catch(e){
+    $("reader").classList.add("hidden");
+    alert("Không mở được camera. Cần mở app bằng HTTPS và cho phép quyền camera.\n\n"+e);
+  }
+}
+async function stopScan(){
+  const s = scanner; scanner = null; scanning = false; torchOn = false;
+  $("reader").classList.add("hidden"); $("btnTorch").classList.add("hidden");
+  $("btnTorch").textContent = "🔦 Bật đèn pin"; $("btnScan").textContent = "📷 Quét camera";
+  if(s){ try{ await s.stop(); await s.clear(); }catch(e){} }
+}
+$("btnTorch").onclick = async () => {
+  if(!scanner) return;
+  try{
+    torchOn = !torchOn;
+    await scanner.applyVideoConstraints({ advanced:[{torch:torchOn}] });
+    $("btnTorch").textContent = torchOn ? "🔦 Tắt đèn pin" : "🔦 Bật đèn pin";
+  }catch(e){ torchOn = !torchOn; }
+};
+
+/* ===== Sự kiện ===== */
+$("btnLookup").onclick = () => doLookup($("code").value);
+$("code").addEventListener("keydown", e => { if(e.key==="Enter") doLookup($("code").value); });
+$("btnScan").onclick = startScan;
+$("unit").onchange = e => { try{localStorage.setItem(LS_UNIT, e.target.value);}catch(_){} $("result").classList.add("hidden"); };
+$("btnData").onclick = () => $("dataPanel").classList.toggle("hidden");
+$("file").onchange = async e => {
+  const f = e.target.files[0]; if(!f) return;
+  try{
+    const wb = XLSX.read(await f.arrayBuffer(), {type:"array"});
+    const raw = parseWorkbook(wb);
+    if(!Object.keys(raw).length) throw new Error("File không có dữ liệu");
+    setData(raw, "file " + f.name);
+  }catch(err){ alert("Không đọc được file: "+err.message); }
+};
+
+/* ===== Khởi động: data.xlsx trên server → bộ nhớ máy → dữ liệu mẫu ===== */
+async function init(){
+  let loaded = false;
+  try{
+    const r = await fetch("data.xlsx?t="+Date.now(), {cache:"no-store"});
+    if(r.ok){
+      const wb = XLSX.read(await r.arrayBuffer(), {type:"array"});
+      const raw = parseWorkbook(wb);
+      if(Object.keys(raw).length){ setData(raw, "data.xlsx trên server"); loaded = true; }
+    }
+  }catch(e){}
+  if(!loaded){
+    try{
+      const s = JSON.parse(localStorage.getItem(LS_KEY)||"null");
+      if(s){ DB = build(s.raw); META = s.meta; renderUnits(); renderInfo(); META.source += " (đã lưu trên máy)"; renderInfo(); loaded = true; }
+    }catch(e){}
+  }
+  if(!loaded){ DB = build(SAMPLE); META = {updated:"-", source:"dữ liệu mẫu"}; renderUnits(); renderInfo(); }
+}
+init();
+
+if("serviceWorker" in navigator){ navigator.serviceWorker.register("sw.js").catch(()=>{}); }
+</script>
+</body>
+</html>
