@@ -1,4 +1,4 @@
-const CACHE = "barcode-app-v2";
+const CACHE = "barcode-app-v4";
 const SHELL = ["./", "./index.html", "./manifest.json"];
 
 self.addEventListener("install", e => {
@@ -20,7 +20,7 @@ self.addEventListener("fetch", e => {
   // Trang chính: ưu tiên bản mới từ mạng (để cập nhật app), mất mạng mới dùng bản lưu
   if (req.mode === "navigate" || url.pathname.endsWith("index.html")) {
     e.respondWith(
-      fetch(req).then(res => {
+      fetch(req, {cache:"no-store"}).then(res => {
         const copy = res.clone();
         caches.open(CACHE).then(c => c.put(req, copy));
         return res;
