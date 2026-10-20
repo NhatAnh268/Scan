@@ -67,9 +67,6 @@
       <button class="btn" id="btnLookup">Tra cứu</button>
       <button class="btn sec" id="btnScan">📷 Quét camera</button>
     </div>
-    <label id="contWrap" style="display:flex;align-items:center;gap:8px;margin:12px 0 0;font-size:14px;color:var(--text)">
-      <input type="checkbox" id="cont" checked style="width:20px;height:20px"> Quét liên tục (không tắt camera sau mỗi mã)
-    </label>
     <div id="reader" class="hidden"><video id="video" playsinline muted autoplay></video><div class="guide"></div><div class="hint">Đặt mã vạch nằm ngang trong khung xanh, đưa lại gần</div></div>
     <button class="btn sec hidden" id="btnTorch" style="width:100%;margin-top:8px">🔦 Bật đèn pin</button>
     <button class="btn sec" id="btnPhoto" style="width:100%;margin-top:8px">📸 Chụp ảnh mã vạch (nếu quét trực tiếp khó bắt)</button>
@@ -110,7 +107,7 @@ const SAMPLE = {
   ]
 };
 
-const APP_VERSION = "v5";
+const APP_VERSION = "v6";
 const LS_KEY = "barcode_data_v1";
 const LS_UNIT = "barcode_unit_v1";
 const $ = id => document.getElementById(id);
@@ -225,7 +222,7 @@ function renderHist(){
 /* ===== Quét camera ===== */
 const FORMATS = ["code_128","ean_13","ean_8","code_39","upc_a","upc_e","itf","codabar","qr_code"];
 let detector = null, stream = null, track = null, busy = false, tickN = 0;
-let lastCode = "", lastTime = 0, torchOn = false;
+let torchOn = false;
 const video = $("video"), work = document.createElement("canvas");
 const wctx = work.getContext("2d", {willReadFrequently:true});
 
@@ -272,11 +269,10 @@ function grab(full){
 }
 
 function onCode(text){
-  const now = Date.now();
-  if(text === lastCode && now - lastTime < 2500) return; // bỏ qua quét trùng liên tiếp
-  lastCode = text; lastTime = now;
+  if(!scanning) return;
+  stopScan();                    // tắt camera ngay khi bắt được mã
   doLookup(text);
-  if(!$("cont").checked) stopScan();
+  setTimeout(() => { try{ $("result").scrollIntoView({behavior:"smooth", block:"center"}); }catch(_){ window.scrollTo(0, 0); } }, 80);
 }
 
 async function tick(){
