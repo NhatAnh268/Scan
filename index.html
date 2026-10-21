@@ -60,6 +60,8 @@
   .mid small{display:block;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
   .note{font-size:13px;color:#92400e;background:#fef3c7;border-radius:8px;padding:5px 9px;margin:4px 0 6px}
   #result.warn{border-left-color:#f59e0b}
+  .posblk{margin:8px 0;padding:8px 10px;border:1px solid #a7f3d0;border-radius:12px;background:#f0fdf4}
+  .posblk .chips{margin:4px 0}
 </style>
 </head>
 <body>
@@ -96,7 +98,7 @@
 
   <div id="dataPanel" class="card hidden">
     <label>Cập nhật dữ liệu từ file Excel (.xlsx) hoặc .csv</label>
-    <p class="status" style="text-align:left;padding:0 0 8px">File gồm 2 sheet. Danh sách hàng: Category | Layer POG | Item code | Barcode | Item Name | các cột đơn vị (1 = có bán). Bảng version: GĐ | CONTENTS | các cột đơn vị (ô là số version).</p>
+    <p class="status" style="text-align:left;padding:0 0 8px">File gồm 2 sheet. Danh sách hàng: Category | Layer POG | Item code | Barcode | Item Name | các cột đơn vị (1 = có bán). Bảng version: GĐ | CONTENTS | các cột đơn vị (ô là số version). Vị trí: Version | Barcode | Item code | Vị trí | Tầng | Số thứ tự | Số mặt (tạo bằng công cụ plnx).</p>
     <input type="file" id="file" accept=".xlsx,.xls,.csv">
     <p class="status" id="dataInfo" style="text-align:left;padding:8px 0 0"></p>
   </div>
@@ -122,11 +124,11 @@ const SAMPLE = {
   ]
 };
 
-const APP_VERSION = "v8";
+const APP_VERSION = "v9";
 const LS_KEY = "barcode_data_v2";
 const LS_UNIT = "barcode_unit_v2";
 const $ = id => document.getElementById(id);
-let DB = {units:[], unitIdx:new Map(), items:new Map(), mat:new Map(), matByPog:new Map(), count:0, noVer:[], hasMatrix:false};
+let DB = {units:[], unitIdx:new Map(), items:new Map(), mat:new Map(), matByPog:new Map(), pos:new Map(), posSku:new Map(), posCount:0, hasPos:false, count:0, noVer:[], hasMatrix:false};
 let META = {updated:"", source:""};
 let scanner = null, scanning = false;
 const history = [];
@@ -145,6 +147,9 @@ const NAMES = {
   stt:   ["sothutu","stt","thutu"],
   tang:  ["tang","tier","shelf","level"]
 };
+// Sheet vị trí (xuất từ công cụ đọc .plnx): Version | Barcode | Item code | Vị trí (khoang) | Tầng | Số thứ tự | Số mặt | ...
+const POS = { version:["version","ver","phienban"], mat:["somat","facing","facings"], file:["sodo","tenfile","file"] };
+const verKey = v => { const t = str(v).replace(",", "."); const n = Number(t); return t !== "" && !isNaN(n) ? String(n) : norm(t); };
 // Mã vạch dạng số: bỏ số 0 đầu để EAN-13 và UPC-A cùng khớp
 const codeKey = s => { s = str(s).replace(/\s/g,""); return /^\d+$/.test(s) ? s.replace(/^0+(?=\d)/,"") : s.toUpperCase(); };
 const isSold = v => { const t = str(v); if(!t) return false; const n = Number(t); return isNaN(n) ? true : n > 0; };
@@ -158,17 +163,22 @@ function findHeader(aoa, test){
 
 /* ===== Đọc file Excel: nhận ra 2 sheet theo nội dung, không cần đặt tên sheet ===== */
 function parseWorkbook(wb){
-  let matrix = null, list = null;
+  let matrix = null, list = null, pos = null;
   for(const name of wb.SheetNames){
     const ws = wb.Sheets[name]; if(!ws) continue;
     // raw:true để mã vạch dạng số không bị đổi thành 8.9E+12
     const aoa = XLSX.utils.sheet_to_json(ws, {header:1, defval:"", raw:true, blankrows:false});
     if(!aoa.length) continue;
-    if(findHeader(aoa, n => NAMES.code.includes(n)) >= 0){ if(!list) list = aoa; }
+    const h = findHeader(aoa, n => NAMES.code.includes(n));
+    if(h >= 0){
+      const hn = (aoa[h] || []).map(norm);
+      const isPos = hn.some(n => POS.version.includes(n)) && hn.some(n => NAMES.tang.includes(n) || NAMES.stt.includes(n));
+      if(isPos){ if(!pos) pos = aoa; } else if(!list) list = aoa;
+    }
     else if(findHeader(aoa, n => NAMES.pog.includes(n)) >= 0){ if(!matrix) matrix = aoa; }
   }
   if(!list) throw new Error("Không thấy sheet danh sách hàng (phải có cột Barcode)");
-  return {matrix, list};
+  return {matrix, list, pos};
 }
 
 /* ===== Dựng chỉ mục tra cứu ===== */
@@ -218,7 +228,7 @@ function build(p){
   const get = (row, c) => c >= 0 ? str(row[c]) : "";
   for(let r = h + 1; r < p.list.length; r++){
     const row = p.list[r] || [], bc = get(row, col.code); if(!bc) continue;
-    const it = { cat:get(row,col.cat), pog:get(row,col.pog), sku:get(row,col.sku), name:get(row,col.name),
+    const it = { key:codeKey(bc), cat:get(row,col.cat), pog:get(row,col.pog), sku:get(row,col.sku), name:get(row,col.name),
                  vitri:get(row,col.vitri), stt:get(row,col.stt), tang:get(row,col.tang), sold:[], extras:[] };
     for(const [c, u] of ucols) it.sold[u] = isSold(row[c]);
     for(const [c, k] of extraCols){ const v = str(row[c]); if(v) it.extras.push([k, v]); }
@@ -232,7 +242,27 @@ function build(p){
   if(p.matrix) for(const arr of items.values()) for(const it of arr){
     if(it.pog && !(mat.get(norm(it.cat) + "|" + norm(it.pog)) || matByPog.get(norm(it.pog)))) noVer.add(it.pog);
   }
-  return {units, unitIdx, items, mat, matByPog, count, noVer:[...noVer], hasMatrix:!!p.matrix};
+  // --- Sheet vị trí: (barcode, version) -> các vị trí
+  const pos = new Map(), posSku = new Map(); let posCount = 0;
+  if(p.pos){
+    const ph = findHeader(p.pos, n => NAMES.code.includes(n));
+    const phead = p.pos[ph].map(str);
+    const pc = f => phead.findIndex(x => f.includes(norm(x)));
+    const cV = pc(POS.version), cB = pc(NAMES.code), cS = pc(NAMES.sku), cK = pc(NAMES.vitri), cT = pc(NAMES.tang), cN = pc(NAMES.stt), cM = pc(POS.mat), cF = pc(POS.file);
+    const g = (row, c) => c >= 0 ? str(row[c]) : "";
+    const push = (m, k, v) => { if(!m.has(k)) m.set(k, []); m.get(k).push(v); };
+    for(let r = ph + 1; r < p.pos.length; r++){
+      const row = p.pos[r] || [], vk = verKey(row[cV]); if(!vk) continue;
+      const rec = {kh:g(row,cK), tang:g(row,cT), stt:g(row,cN), mat:g(row,cM), file:g(row,cF)};
+      const bc = g(row, cB), sku = g(row, cS);
+      if(bc) push(pos, codeKey(bc) + "|" + vk, rec);
+      if(sku) push(posSku, norm(sku) + "|" + vk, rec);
+      posCount++;
+    }
+    const num = x => { const n = Number(x); return isNaN(n) ? 1e9 : n; };
+    for(const m of [pos, posSku]) for(const a of m.values()) a.sort((x, y) => num(x.kh) - num(y.kh) || num(x.tang) - num(y.tang) || num(x.stt) - num(y.stt));
+  }
+  return {units, unitIdx, items, mat, matByPog, pos, posSku, posCount, hasPos:!!p.pos, count, noVer:[...noVer], hasMatrix:!!p.matrix};
 }
 
 function setData(p, source){
@@ -246,6 +276,7 @@ function setData(p, source){
 function renderInfo(){
   let t = `Nguồn: ${META.source} • ${DB.units.length} đơn vị • ${DB.count} mặt hàng • cập nhật ${META.updated}`;
   if(!DB.hasMatrix) t += " • ⚠ chưa thấy sheet bảng version";
+  t += DB.hasPos ? ` • ${DB.posCount} dòng vị trí` : " • (chưa có sheet vị trí)";
   if(DB.noVer.length) t += ` • ⚠ ${DB.noVer.length} nhóm POG chưa có trong bảng version: ${DB.noVer.slice(0,5).join("; ")}${DB.noVer.length > 5 ? "..." : ""}`;
   $("dataInfo").textContent = t;
   $("status").textContent = `Dữ liệu: ${META.source} (${META.updated}) • bản ${APP_VERSION}`;
@@ -269,15 +300,33 @@ function versionOf(it, u){
   return v ? (v[u] || "") : null;
 }
 
+function positionsOf(it, ver){
+  if(!DB.hasPos || !ver) return [];
+  const vk = verKey(ver);
+  return DB.pos.get(it.key + "|" + vk) || (it.sku && DB.posSku.get(norm(it.sku) + "|" + vk)) || [];
+}
+function posHtml(list){
+  const n = list.length;
+  return list.map((p, i) => `<div class="posblk">` +
+    (n > 1 ? `<div class="recno">Vị trí ${i+1}/${n}</div>` : "") +
+    `<div class="chips"><div class="chip"><small>Khoang</small>${esc(p.kh || "—")}</div><div class="chip"><small>Tầng</small>${esc(p.tang || "—")}</div><div class="chip"><small>Số thứ tự</small>${esc(p.stt || "—")}</div></div>` +
+    (p.mat ? `<div class="extra"><b>Số mặt:</b> ${esc(p.mat)}</div>` : "") +
+  `</div>`).join("");
+}
+
 function itemHtml(it, u, unit, i, n){
   const ver = versionOf(it, u), sold = it.sold[u];
   const chips = [];
   if(DB.hasMatrix) chips.push(`<div class="chip"><small>Version</small>${ver ? esc(ver) : "—"}</div>`);
-  if(it.tang) chips.push(`<div class="chip"><small>Tầng</small>${esc(it.tang)}</div>`);
-  if(it.stt)  chips.push(`<div class="chip"><small>Số thứ tự</small>${esc(it.stt)}</div>`);
+  const plist = positionsOf(it, ver);
+  if(!DB.hasPos){
+    if(it.tang) chips.push(`<div class="chip"><small>Tầng</small>${esc(it.tang)}</div>`);
+    if(it.stt)  chips.push(`<div class="chip"><small>Số thứ tự</small>${esc(it.stt)}</div>`);
+  }
   let note = "";
   if(DB.hasMatrix && ver === null) note = "Nhóm POG này chưa có trong bảng version.";
   else if(DB.hasMatrix && ver === "") note = "Đơn vị này chưa có version cho nhóm POG này.";
+  else if(DB.hasPos && ver && !plist.length) note = `Chưa có vị trí của version ${ver} trong sheet vị trí.`;
   const mid = (label, v) => v ? `<div class="mid"><small>${label}</small>${esc(v)}</div>` : "";
   const info = [["Danh mục", it.cat]].concat(it.extras).filter(x => x[1]);
   return `<div class="rec">` +
@@ -285,6 +334,7 @@ function itemHtml(it, u, unit, i, n){
     (sold === true ? `<div class="stat yes">✔ Có bán tại ${esc(unit)}</div>` : sold === false ? `<div class="stat no">✖ Không bán tại ${esc(unit)}</div>` : "") +
     (it.name ? `<div class="name">${esc(it.name)}</div>` : "") +
     (chips.length ? `<div class="chips">${chips.join("")}</div>` : "") +
+    posHtml(plist) +
     (note ? `<div class="note">${note}</div>` : "") +
     mid("Mã hàng", it.sku) + mid("Nhóm POG", it.pog) + mid("Vị trí", it.vitri) +
     info.map(([k,v]) => `<div class="extra"><b>${esc(k)}:</b> ${esc(v)}</div>`).join("") +
@@ -292,7 +342,9 @@ function itemHtml(it, u, unit, i, n){
 }
 function summary(items, u){
   const it = items[0], ver = versionOf(it, u), sold = it.sold[u];
-  const t = [sold === false ? "Không bán" : "", ver ? "V " + ver : "", it.tang ? "Tầng " + it.tang : "", it.stt ? "STT " + it.stt : ""].filter(Boolean).join(" · ");
+  const p0 = positionsOf(it, ver)[0];
+  const t = [sold === false ? "Không bán" : "", ver ? "V " + ver : "",
+    p0 ? `Khoang ${p0.kh} · Tầng ${p0.tang} · STT ${p0.stt}` : [it.tang ? "Tầng " + it.tang : "", it.stt ? "STT " + it.stt : ""].filter(Boolean).join(" · ")].filter(Boolean).join(" · ");
   return t || it.sku || it.name || "Có";
 }
 

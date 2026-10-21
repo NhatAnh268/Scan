@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Công cụ đọc file .plnx</title>
+<style>
+  :root{--bg:#f3f5f7;--card:#fff;--text:#14202b;--muted:#64748b;--primary:#0f766e;--bad:#dc2626;--ok:#16a34a;--line:#e2e8f0}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text)}
+  header{background:var(--primary);color:#fff;padding:14px 20px}
+  header h1{font-size:19px;margin:0}
+  header p{margin:4px 0 0;font-size:13px;opacity:.9}
+  main{max-width:1000px;margin:0 auto;padding:16px}
+  .card{background:var(--card);border-radius:14px;padding:16px;margin-bottom:14px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+  h2{font-size:15px;margin:0 0 10px}
+  .drop{border:2px dashed #94a3b8;border-radius:12px;padding:26px 12px;text-align:center;color:var(--muted);background:#f8fafc}
+  .drop.over{border-color:var(--primary);background:#ecfdf5;color:var(--primary)}
+  .row{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px;align-items:center}
+  button,label.btn{font-size:15px;font-weight:600;padding:10px 16px;border:0;border-radius:10px;background:var(--primary);color:#fff;cursor:pointer;display:inline-block}
+  button.sec,label.btn.sec{background:#e2e8f0;color:var(--text)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  input[type=file]{display:none}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}
+  th{font-size:12px;text-transform:uppercase;color:var(--muted);letter-spacing:.03em}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  td input{width:110px;font-size:14px;padding:6px 8px;border:1px solid var(--line);border-radius:8px}
+  td input.warn{border-color:var(--bad);background:#fef2f2}
+  tr.sel{background:#f0fdfa}
+  .st-ok{color:var(--ok);font-weight:600}.st-bad{color:var(--bad);font-weight:600}.st-wait{color:var(--muted)}
+  .small{font-size:13px;color:var(--muted)}
+  .opt{display:flex;gap:8px;align-items:flex-start;font-size:14px;margin-top:12px}
+  .opt input{margin-top:3px}
+  .scroll{overflow:auto;max-height:340px}
+  .sum{font-size:15px;font-weight:600;margin-top:10px}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>Công cụ đọc file .plnx (Spaceman)</h1>
+  <p>Kéo thả các file .plnx vào, công cụ tạo sheet "Vị trí" (khoang, tầng, số thứ tự) để dán vào data.xlsx.</p>
+</header>
+<main>
+  <div class="card">
+    <h2>1. Chọn file .plnx</h2>
+    <div class="drop" id="drop">Kéo thả nhiều file .plnx vào đây<br><span class="small">hoặc bấm một trong hai nút bên dưới</span></div>
+    <div class="row">
+      <label class="btn" for="files">Chọn file .plnx</label>
+      <label class="btn sec" for="folder">Chọn cả thư mục</label>
+      <button class="sec" id="btnClear" disabled>Xoá danh sách</button>
+    </div>
+    <input type="file" id="files" accept=".plnx" multiple>
+    <input type="file" id="folder" webkitdirectory multiple>
+    <label class="opt"><input type="checkbox" id="countEmpty"><span>Tính cả tầng trống ở trên cùng khi đánh số tầng <span class="small">(mặc định bỏ qua tầng không có sản phẩm nào, vì kệ trống không có hàng để tra)</span></span></label>
+  </div>
+
+  <div class="card hidden" id="listCard">
+    <h2>2. Kiểm tra</h2>
+    <p class="small" style="margin:0 0 8px">Version lấy từ số đầu tên file ("7. Sữa UHT" là version 7; "0.5 Sữa UHT + 0.5 Sữa hạt" là version 0.5). Ô nào đỏ là chưa đọc được, bạn nhập tay. Có nhiều version thì cách nhau dấu chấm phẩy (ví dụ 0.5; 1).</p>
+    <div class="scroll"><table>
+      <thead><tr><th>File</th><th>Version</th><th class="num">Vị trí</th><th class="num">Khoang</th><th class="num">Tầng</th><th>Trạng thái</th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table></div>
+    <div class="sum" id="sum"></div>
+  </div>
+
+  <div class="card hidden" id="prevCard">
+    <h2>Xem thử: <span id="prevName"></span></h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Khoang</th><th>Tầng</th><th>STT</th><th>Barcode</th><th>Item code</th><th class="num">Số mặt</th><th>Tên hàng</th></tr></thead>
+      <tbody id="prev"></tbody>
+    </table></div>
+    <p class="small">Đối chiếu vài sản phẩm với sơ đồ trong Spaceman để chắc khoang, tầng, số thứ tự đúng.</p>
+  </div>
+
+  <div class="card hidden" id="outCard">
+    <h2>3. Tải kết quả</h2>
+    <button id="btnExport" disabled>Tải file ViTri.xlsx</button>
+    <p class="small">Mở ViTri.xlsx, copy sheet "ViTri" vào file data.xlsx của bạn (chuột phải tên sheet, chọn Move or Copy, chọn data.xlsx, tick Create a copy), rồi up data.xlsx lên GitHub như bình thường.</p>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const items = [];   // {name, versionText, rows, info, status, err}
+
+/* ===== Đọc XML của một file .plnx ===== */
+const kid = (el, tag) => { for(const c of el.children) if(c.tagName === tag) return c; return null; };
+const txt = (el, tag) => { const k = kid(el, tag); return k ? k.textContent.trim() : ""; };
+const num = (el, tag) => { const v = parseFloat(txt(el, tag)); return isNaN(v) ? 0 : v; };
+
+// Các khoang: lấy từ thanh ngăn (notchbar) theo từng Segment; nếu không có thì lấy từ chiều rộng các kệ
+function khoangIntervals(fixtures){
+  const build = type => {
+    const m = new Map();
+    for(const fx of fixtures){
+      if(fx.getAttribute("type") !== type) continue;
+      const s = num(fx, "Segment"), x0 = num(fx, "X"), x1 = x0 + num(fx, "Width");
+      const a = m.get(s);
+      if(a){ a[0] = Math.min(a[0], x0); a[1] = Math.max(a[1], x1); } else m.set(s, [x0, x1]);
+    }
+    return [...m.values()].sort((a, b) => a[0] - b[0]);
+  };
+  const n = build("notchbar");
+  return n.length ? n : build("shelf");
+}
+function khoangOf(iv, x){
+  if(!iv.length) return 1;
+  for(let i = 0; i < iv.length; i++) if(x >= iv[i][0] - 0.01 && x < iv[i][1] + 0.01) return i + 1;
+  let best = 0, bd = 1e18;
+  iv.forEach((r, i) => { const d = x < r[0] ? r[0] - x : x - r[1]; if(d < bd){ bd = d; best = i; } });
+  return best + 1;
+}
+
+function parsePlnx(xml, countEmpty){
+  const doc = new DOMParser().parseFromString(xml.replace(/^﻿/, ""), "application/xml");
+  if(doc.getElementsByTagName("parsererror").length) throw new Error("File XML bị lỗi");
+  const prod = new Map();
+  for(const cp of doc.getElementsByTagName("commonproduct")) prod.set(cp.getAttribute("id"), {upc: txt(cp, "Upc"), name: txt(cp, "Name")});
+
+  const rows = []; let kmax = 0, tmax = 0, noUpc = 0;
+  const pgs = [...doc.getElementsByTagName("planogram")];
+  pgs.forEach((pg, pi) => {
+    const fixtures = [...pg.getElementsByTagName("fixture")];
+    const iv = khoangIntervals(fixtures);
+    // gom vị trí
+    const raw = []; let order = 0;
+    for(const fx of fixtures){
+      const pl = kid(fx, "positions"); if(!pl) continue;
+      const fy = num(fx, "Y"), fxx = num(fx, "X");
+      for(const p of pl.children){
+        if(p.tagName !== "position") continue;
+        const code = txt(p, "ProdPos"), pr = prod.get(code) || {upc:"", name:""};
+        const cx = fxx + num(p, "X") + num(p, "HorizSpace") / 2;
+        raw.push({y: fy, cx, order: order++, code, upc: pr.upc, name: pr.name, mat: Math.round(num(p, "TotalFacings")), kh: khoangOf(iv, cx)});
+      }
+    }
+    if(!raw.length) return;
+    // các tầng: độ cao của kệ (gộp các độ cao sát nhau)
+    let ys = fixtures.filter(f => f.getAttribute("type") === "shelf").map(f => num(f, "Y")).concat(raw.map(r => r.y));
+    ys = [...new Set(ys.map(y => Math.round(y * 10) / 10))].sort((a, b) => b - a);
+    const cl = [];
+    for(const y of ys){ if(cl.length && cl[cl.length - 1].lo - y <= 1.0) cl[cl.length - 1].lo = y; else cl.push({hi: y, lo: y}); }
+    const clusterOf = y => { let b = 0, bd = 1e18; cl.forEach((c, i) => { const d = y > c.hi ? y - c.hi : y < c.lo ? c.lo - y : 0; if(d < bd){ bd = d; b = i; } }); return b; };
+    raw.forEach(r => r.ci = clusterOf(r.y));
+    const used = [...new Set(raw.map(r => r.ci))].sort((a, b) => a - b);
+    const tierOf = new Map();
+    if(countEmpty) cl.forEach((c, i) => tierOf.set(i, i + 1)); else used.forEach((c, i) => tierOf.set(c, i + 1));
+    raw.forEach(r => r.tang = tierOf.get(r.ci));
+    // số thứ tự: trái sang phải trong từng (khoang, tầng)
+    const groups = new Map();
+    for(const r of raw){ const k = r.kh + "|" + r.tang; if(!groups.has(k)) groups.set(k, []); groups.get(k).push(r); }
+    for(const g of groups.values()){ g.sort((a, b) => a.cx - b.cx || a.order - b.order); g.forEach((r, i) => r.stt = i + 1); }
+    raw.sort((a, b) => a.kh - b.kh || a.tang - b.tang || a.stt - b.stt);
+    const pname = pg.getAttribute("name") || "";
+    for(const r of raw){ if(!r.upc) noUpc++; rows.push({kh:r.kh, tang:r.tang, stt:r.stt, upc:r.upc, code:r.code, name:r.name, mat:r.mat, plano:pname}); }
+    kmax = Math.max(kmax, iv.length); tmax = Math.max(tmax, tierOf.size ? Math.max(...tierOf.values()) : 0);
+  });
+  return {rows, info:{positions: rows.length, khoang: kmax, tang: tmax, noUpc}};
+}
+
+/* ===== Version từ tên file ===== */
+function parseVersions(fileName){
+  const base = fileName.replace(/\.plnx$/i, "");
+  const out = [];
+  for(const part of base.split("+")){
+    const m = part.match(/^\s*(\d+(?:[.,]\d+)?)(?=\s|\.|$)/);
+    if(m){ const v = m[1].replace(",", "."); if(!out.includes(v)) out.push(v); }
+  }
+  return out.join("; ");
+}
+const versionList = t => [...new Set(String(t).split(/[;\s/]+/).map(x => x.trim().replace(",", ".")).filter(x => x !== "" && !isNaN(Number(x))).map(x => String(Number(x))))];
+
+/* ===== Giao diện ===== */
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const tick = () => new Promise(r => setTimeout(r, 0));
+
+async function readOne(file){
+  const it = {name: file.name, versionText: parseVersions(file.name), rows: [], info: null, status: "wait", err: "", file};
+  items.push(it); render();
+  await process(it);
+}
+async function process(it){
+  it.status = "wait"; render(); await tick();
+  try{
+    const zip = await JSZip.loadAsync(it.file);
+    const f = zip.file("planograms.xml");
+    if(!f) throw new Error("Không thấy planograms.xml trong file");
+    const xml = await f.async("string");
+    const r = parsePlnx(xml, $("countEmpty").checked);
+    it.rows = r.rows; it.info = r.info; it.status = r.rows.length ? "ok" : "bad";
+    if(!r.rows.length) it.err = "Sơ đồ không có sản phẩm";
+  }catch(e){ it.status = "bad"; it.err = (e && e.message) || String(e); }
+  render();
+}
+async function addFiles(list){
+  const fs = [...list].filter(f => /\.plnx$/i.test(f.name));
+  if(!fs.length){ alert("Không có file .plnx nào được chọn."); return; }
+  for(const f of fs) await readOne(f);
+}
+
+let selected = -1;
+function render(){
+  $("listCard").classList.toggle("hidden", !items.length);
+  $("btnClear").disabled = !items.length;
+  $("tbody").innerHTML = items.map((it, i) => {
+    const vs = versionList(it.versionText);
+    const st = it.status === "ok" ? `<span class="st-ok">Đã đọc</span>` : it.status === "bad" ? `<span class="st-bad">${esc(it.err || "Lỗi")}</span>` : `<span class="st-wait">Đang đọc...</span>`;
+    return `<tr data-i="${i}" class="${i === selected ? "sel" : ""}">
+      <td>${esc(it.name)}</td>
+      <td><input data-v="${i}" class="${vs.length ? "" : "warn"}" value="${esc(it.versionText)}"></td>
+      <td class="num">${it.info ? it.info.positions : ""}</td><td class="num">${it.info ? it.info.khoang : ""}</td><td class="num">${it.info ? it.info.tang : ""}</td>
+      <td>${st}</td></tr>`;
+  }).join("");
+  updateSummary();
+}
+function updateSummary(){
+  const ok = items.filter(i => i.status === "ok"), noVer = ok.filter(i => !versionList(i.versionText).length);
+  const total = ok.reduce((n, i) => n + i.rows.length * versionList(i.versionText).length, 0);
+  const noUpc = ok.reduce((n, i) => n + i.info.noUpc, 0);
+  $("sum").textContent = items.length ? `Đã đọc ${ok.length}/${items.length} file • ${total} dòng vị trí` + (noVer.length ? ` • ⚠ ${noVer.length} file chưa có version` : "") + (noUpc ? ` • ⚠ ${noUpc} vị trí thiếu barcode` : "") : "";
+  $("outCard").classList.toggle("hidden", !ok.length);
+  $("btnExport").disabled = !ok.length || noVer.length > 0;
+  $("btnExport").title = noVer.length ? "Còn file chưa có version" : "";
+}
+function preview(i){
+  selected = i; const it = items[i];
+  if(!it || !it.rows.length){ $("prevCard").classList.add("hidden"); render(); return; }
+  $("prevCard").classList.remove("hidden");
+  $("prevName").textContent = it.name + " (" + it.rows.length + " vị trí, hiện 40 dòng đầu)";
+  $("prev").innerHTML = it.rows.slice(0, 40).map(r => `<tr><td>${r.kh}</td><td>${r.tang}</td><td>${r.stt}</td><td>${esc(r.upc)}</td><td>${esc(r.code)}</td><td class="num">${r.mat}</td><td>${esc(r.name)}</td></tr>`).join("");
+  render();
+}
+$("tbody").addEventListener("click", e => { const tr = e.target.closest("tr"); if(tr && e.target.tagName !== "INPUT") preview(+tr.dataset.i); });
+$("tbody").addEventListener("input", e => {
+  const i = e.target.dataset && e.target.dataset.v; if(i === undefined) return;
+  items[+i].versionText = e.target.value;
+  e.target.classList.toggle("warn", !versionList(e.target.value).length);
+  updateSummary();
+});
+$("files").onchange = e => { addFiles(e.target.files); e.target.value = ""; };
+$("folder").onchange = e => { addFiles(e.target.files); e.target.value = ""; };
+$("btnClear").onclick = () => { items.length = 0; selected = -1; $("prevCard").classList.add("hidden"); render(); };
+$("countEmpty").onchange = async () => { for(const it of items) await process(it); if(selected >= 0) preview(selected); };
+const drop = $("drop");
+["dragenter","dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => { if(e.dataTransfer && e.dataTransfer.files) addFiles(e.dataTransfer.files); });
+
+/* ===== Xuất Excel ===== */
+$("btnExport").onclick = () => {
+  const aoa = [["Version","Barcode","Item code","Vị trí","Tầng","Số thứ tự","Số mặt","Tên hàng","Sơ đồ"]];
+  for(const it of items){
+    if(it.status !== "ok") continue;
+    for(const v of versionList(it.versionText))
+      for(const r of it.rows) aoa.push([v, r.upc, r.code, r.kh, r.tang, r.stt, r.mat, r.name, it.name.replace(/\.plnx$/i, "")]);
+  }
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [8, 16, 14, 8, 6, 10, 8, 50, 30].map(w => ({wch: w}));
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "ViTri");
+  XLSX.writeFile(wb, "ViTri.xlsx");
+};
+window.__plnx = {parsePlnx, parseVersions, versionList};   // phục vụ kiểm thử
+</script>
+</body>
+</html>
