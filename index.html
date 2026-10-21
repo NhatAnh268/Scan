@@ -52,6 +52,14 @@
   .rec + .rec{border-top:2px dashed var(--line);margin-top:14px;padding-top:12px}
   .recno{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase}
   .multi{margin:8px 0 2px;padding:6px 10px;background:#fef3c7;color:#92400e;border-radius:8px;font-size:14px;font-weight:600}
+  .stat{margin:8px 0 4px;padding:8px 12px;border-radius:10px;font-size:18px;font-weight:800}
+  .stat.yes{background:#dcfce7;color:#166534}
+  .stat.no{background:#fee2e2;color:#991b1b}
+  .name{font-size:20px;font-weight:800;line-height:1.25;margin:8px 0 4px}
+  .mid{font-size:22px;font-weight:700;line-height:1.2;margin:10px 0}
+  .mid small{display:block;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+  .note{font-size:13px;color:#92400e;background:#fef3c7;border-radius:8px;padding:5px 9px;margin:4px 0 6px}
+  #result.warn{border-left-color:#f59e0b}
 </style>
 </head>
 <body>
@@ -88,7 +96,7 @@
 
   <div id="dataPanel" class="card hidden">
     <label>Cập nhật dữ liệu từ file Excel (.xlsx) hoặc .csv</label>
-    <p class="status" style="text-align:left;padding:0 0 8px">Mỗi sheet = 1 đơn vị. Cột: Barcode | Mã hàng | Vị trí | Số thứ tự | Tầng | Version | Tên nhóm POG</p>
+    <p class="status" style="text-align:left;padding:0 0 8px">File gồm 2 sheet. Danh sách hàng: Category | Layer POG | Item code | Barcode | Item Name | các cột đơn vị (1 = có bán). Bảng version: GĐ | CONTENTS | các cột đơn vị (ô là số version).</p>
     <input type="file" id="file" accept=".xlsx,.xls,.csv">
     <p class="status" id="dataInfo" style="text-align:left;padding:8px 0 0"></p>
   </div>
@@ -104,155 +112,210 @@ var BarcodeDetectionAPI=(function(e){Object.defineProperty(e,Symbol.toStringTag,
 <script>
 /* ===== Dữ liệu mẫu dự phòng (khi chưa có data.xlsx) ===== */
 const SAMPLE = {
-  "Đơn vị A": [
-    {"Barcode":"8936228560892","Mã hàng":"SP001234","Vị trí":"Kệ lạnh L03","Số thứ tự":"5","Tầng":"2","Version":"V2.1","Tên nhóm POG":"Sữa chua"},
-    {"Barcode":"8936228560892","Mã hàng":"SP001234","Vị trí":"Đầu kệ E01","Số thứ tự":"1","Tầng":"1","Version":"V2.1","Tên nhóm POG":"Khuyến mãi tháng"}
+  matrix: [
+    ["GĐ","CONTENTS","FujiMart Le Duan","FujiMart Tay Son"],
+    ["G1 - Drink","Sữa tươi tiệt trùng (UHT Milk)",7,8]
   ],
-  "Đơn vị B": [
-    {"Barcode":"8936228560892","Mã hàng":"SP001234","Vị trí":"Kệ mát M07","Số thứ tự":"3","Tầng":"3","Version":"V1.4","Tên nhóm POG":"Sữa chua"}
+  list: [
+    ["Category","Layer POG","Item code","Barcode","Item Name","FujiMart Le Duan","FujiMart Tay Son"],
+    ["G1 - Drink","Sữa tươi tiệt trùng (UHT Milk)","2001327074","8934673574341","VNM_Lốc sữa tươi TT hương dâu 180mlx4 T12",1,0]
   ]
 };
 
-const APP_VERSION = "v7";
-const LS_KEY = "barcode_data_v1";
-const LS_UNIT = "barcode_unit_v1";
+const APP_VERSION = "v8";
+const LS_KEY = "barcode_data_v2";
+const LS_UNIT = "barcode_unit_v2";
 const $ = id => document.getElementById(id);
-let DB = {};          // { donVi: { exact: Map, prefixes: [ [prefix,row] ] } }
+let DB = {units:[], unitIdx:new Map(), items:new Map(), mat:new Map(), matByPog:new Map(), count:0, noVer:[], hasMatrix:false};
 let META = {updated:"", source:""};
 let scanner = null, scanning = false;
 const history = [];
 
 /* ===== Chuẩn hoá tên cột ===== */
 const norm = s => String(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/đ/gi,"d").toLowerCase().replace(/[^a-z0-9]/g,"");
-// Tên cột Excel được nhận (không phân biệt hoa thường, bỏ dấu). Ví dụ "Tên nhóm POG" -> tennhompog
-const FIELDS = {
-  code:   ["barcode","mavach","code","mavandon"],
-  sku:    ["mahang","masp","masanpham","sku","itemcode"],
-  vitri:  ["vitri","ke","oke","location","position","bin"],
-  stt:    ["sothutu","stt","thutu"],
-  tang:   ["tang","tier","shelf","level"],
-  version:["version","ver","phienban"],
-  pog:    ["tennhompog","nhompog","tenpog","pog","tennhom","nhom"],
-  vung:   ["vung","khuvuc","zone","tuyen"]
+const str = v => String(v == null ? "" : v).replace(/\s+/g," ").trim();
+// Tên cột Excel được nhận (không phân biệt hoa thường, bỏ dấu)
+const NAMES = {
+  code:  ["barcode","barrcode","mavach"],
+  cat:   ["category","gd","danhmuc"],
+  pog:   ["layerpog","tennhompog","nhompog","pog","contents","tennhom","nhomhang"],
+  sku:   ["itemcode","mahang","masp","masanpham","sku"],
+  name:  ["itemname","tenhang","tensanpham","tensp","name"],
+  vitri: ["vitri","ke","oke","location","position","bin"],
+  stt:   ["sothutu","stt","thutu"],
+  tang:  ["tang","tier","shelf","level"]
 };
-const str = v => String(v == null ? "" : v).trim();
+// Mã vạch dạng số: bỏ số 0 đầu để EAN-13 và UPC-A cùng khớp
+const codeKey = s => { s = str(s).replace(/\s/g,""); return /^\d+$/.test(s) ? s.replace(/^0+(?=\d)/,"") : s.toUpperCase(); };
+const isSold = v => { const t = str(v); if(!t) return false; const n = Number(t); return isNaN(n) ? true : n > 0; };
+function findHeader(aoa, test){
+  for(let r = 0; r < Math.min(aoa.length, 60); r++){
+    const row = aoa[r] || [];
+    for(let c = 0; c < row.length; c++){ if(test(norm(row[c]))) return r; }
+  }
+  return -1;
+}
+
+/* ===== Đọc file Excel: nhận ra 2 sheet theo nội dung, không cần đặt tên sheet ===== */
+function parseWorkbook(wb){
+  let matrix = null, list = null;
+  for(const name of wb.SheetNames){
+    const ws = wb.Sheets[name]; if(!ws) continue;
+    // raw:true để mã vạch dạng số không bị đổi thành 8.9E+12
+    const aoa = XLSX.utils.sheet_to_json(ws, {header:1, defval:"", raw:true, blankrows:false});
+    if(!aoa.length) continue;
+    if(findHeader(aoa, n => NAMES.code.includes(n)) >= 0){ if(!list) list = aoa; }
+    else if(findHeader(aoa, n => NAMES.pog.includes(n)) >= 0){ if(!matrix) matrix = aoa; }
+  }
+  if(!list) throw new Error("Không thấy sheet danh sách hàng (phải có cột Barcode)");
+  return {matrix, list};
+}
 
 /* ===== Dựng chỉ mục tra cứu ===== */
-// Mỗi đơn vị: exact = Map(barcode -> [các dòng]) (1 barcode có thể nằm nhiều vị trí), prefixes = [[đầu mã, dòng]]
-function build(raw){
-  const db = {};
-  for(const [unit, rows] of Object.entries(raw)){
-    const exact = new Map(), prefixes = [];
-    let count = 0;
-    if(rows.length){
-      const keys = Object.keys(rows[0]);
-      const col = {};
-      for(const [f, names] of Object.entries(FIELDS)) col[f] = keys.find(k => names.includes(norm(k))) || null;
-      if(col.code){
-        const used = new Set(Object.values(col).filter(Boolean));
-        for(const row of rows){
-          const code = str(row[col.code]); if(!code) continue;
-          const rec = {};
-          for(const f of Object.keys(FIELDS)) if(f !== "code") rec[f] = col[f] ? str(row[col[f]]) : "";
-          rec.extras = [];
-          for(const k of keys){ if(used.has(k)) continue; const v = str(row[k]); if(v) rec.extras.push([k, v]); }
-          if(code.endsWith("*")) prefixes.push([code.slice(0,-1), rec]);
-          else { if(!exact.has(code)) exact.set(code, []); exact.get(code).push(rec); }
-          count++;
-        }
-      }
+function build(p){
+  const units = [], unitIdx = new Map();
+  const addUnit = label => { const k = norm(label); if(!k) return -1; if(!unitIdx.has(k)){ unitIdx.set(k, units.length); units.push(label); } return unitIdx.get(k); };
+
+  // --- Sheet bảng version: nhóm hàng × đơn vị
+  const mat = new Map(), matByPog = new Map();
+  if(p.matrix){
+    const h = findHeader(p.matrix, n => NAMES.pog.includes(n));
+    const head = p.matrix[h].map(str);
+    const cPog = head.findIndex(x => NAMES.pog.includes(norm(x)));
+    const cCat = head.findIndex(x => NAMES.cat.includes(norm(x)));
+    const ucols = [];
+    head.forEach((x, c) => { if(x && c !== cPog && c !== cCat) ucols.push([c, addUnit(x)]); });
+    for(let r = h + 1; r < p.matrix.length; r++){
+      const row = p.matrix[r] || [], pog = str(row[cPog]); if(!pog) continue;
+      const vers = [];
+      for(const [c, u] of ucols) vers[u] = str(row[c]);
+      mat.set(norm(cat0(row, cCat)) + "|" + norm(pog), vers);
+      if(!matByPog.has(norm(pog))) matByPog.set(norm(pog), vers);
     }
-    prefixes.sort((a,b)=>b[0].length-a[0].length);
-    db[unit] = {exact, prefixes, count};
   }
-  return db;
+  function cat0(row, c){ return c >= 0 ? row[c] : ""; }
+
+  // --- Sheet danh sách hàng
+  const h = findHeader(p.list, n => NAMES.code.includes(n));
+  const head = p.list[h].map(str);
+  const col = {};
+  for(const [f, names] of Object.entries(NAMES)) col[f] = head.findIndex(x => names.includes(norm(x)));
+  const known = new Set(Object.values(col).filter(c => c >= 0));
+  const looksLikeFlag = c => {   // cột chỉ toàn 0/1/trống -> cột đơn vị
+    let n = 0, ok = 0;
+    for(let r = h + 1; r < p.list.length && n < 300; r++){ const t = str((p.list[r] || [])[c]); if(!t) continue; n++; if(t === "0" || t === "1") ok++; }
+    return n > 0 && ok / n >= 0.9;
+  };
+  const ucols = [], extraCols = [];
+  head.forEach((x, c) => {
+    if(known.has(c) || !x) return;
+    const k = norm(x);
+    if(unitIdx.has(k) || looksLikeFlag(c)) ucols.push([c, addUnit(x)]);
+    else extraCols.push([c, x]);
+  });
+
+  const items = new Map(); let count = 0;
+  const get = (row, c) => c >= 0 ? str(row[c]) : "";
+  for(let r = h + 1; r < p.list.length; r++){
+    const row = p.list[r] || [], bc = get(row, col.code); if(!bc) continue;
+    const it = { cat:get(row,col.cat), pog:get(row,col.pog), sku:get(row,col.sku), name:get(row,col.name),
+                 vitri:get(row,col.vitri), stt:get(row,col.stt), tang:get(row,col.tang), sold:[], extras:[] };
+    for(const [c, u] of ucols) it.sold[u] = isSold(row[c]);
+    for(const [c, k] of extraCols){ const v = str(row[c]); if(v) it.extras.push([k, v]); }
+    const key = codeKey(bc);
+    if(!items.has(key)) items.set(key, []);
+    items.get(key).push(it); count++;
+  }
+
+  // --- Nhóm POG ở sheet danh sách nhưng không có trong bảng version
+  const noVer = new Set();
+  if(p.matrix) for(const arr of items.values()) for(const it of arr){
+    if(it.pog && !(mat.get(norm(it.cat) + "|" + norm(it.pog)) || matByPog.get(norm(it.pog)))) noVer.add(it.pog);
+  }
+  return {units, unitIdx, items, mat, matByPog, count, noVer:[...noVer], hasMatrix:!!p.matrix};
 }
 
-function parseWorkbook(wb){
-  const raw = {};
-  for(const name of wb.SheetNames){
-    // raw:true để mã vạch dạng số không bị Excel đổi thành 8.9E+12
-    const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], {defval:"", raw:true});
-    if(rows.length) raw[name.trim()] = rows;
-  }
-  return raw;
-}
-
-function setData(raw, source){
-  DB = build(raw);
+function setData(p, source){
+  DB = build(p);
   META = {updated:new Date().toLocaleString("vi-VN"), source};
-  try{ localStorage.setItem(LS_KEY, JSON.stringify({raw, meta:META})); }catch(e){ console.warn("Không lưu được offline", e); }
+  try{ localStorage.setItem(LS_KEY, JSON.stringify({p, meta:META})); }catch(e){ console.warn("Không lưu được offline", e); }
   renderUnits();
   renderInfo();
 }
 
 function renderInfo(){
-  const total = Object.values(DB).reduce((n,u)=>n+u.count,0);
-  $("dataInfo").textContent = `Nguồn: ${META.source} • ${Object.keys(DB).length} đơn vị • ${total} dòng • cập nhật ${META.updated}`;
+  let t = `Nguồn: ${META.source} • ${DB.units.length} đơn vị • ${DB.count} mặt hàng • cập nhật ${META.updated}`;
+  if(!DB.hasMatrix) t += " • ⚠ chưa thấy sheet bảng version";
+  if(DB.noVer.length) t += ` • ⚠ ${DB.noVer.length} nhóm POG chưa có trong bảng version: ${DB.noVer.slice(0,5).join("; ")}${DB.noVer.length > 5 ? "..." : ""}`;
+  $("dataInfo").textContent = t;
   $("status").textContent = `Dữ liệu: ${META.source} (${META.updated}) • bản ${APP_VERSION}`;
 }
 
 function renderUnits(){
-  const sel = $("unit"), keep = localStorage.getItem(LS_UNIT);
+  const sel = $("unit"); let keep = "";
+  try{ keep = localStorage.getItem(LS_UNIT) || ""; }catch(_){}
   sel.innerHTML = "";
-  for(const u of Object.keys(DB)){ const o=document.createElement("option"); o.value=o.textContent=u; sel.appendChild(o); }
-  if(keep && DB[keep]) sel.value = keep;
+  DB.units.forEach((u, i) => { const o = document.createElement("option"); o.value = String(i); o.textContent = u; sel.appendChild(o); });
+  const idx = DB.units.indexOf(keep);
+  if(idx >= 0) sel.value = String(idx);
 }
 
 /* ===== Tra cứu ===== */
-function lookup(unit, code){
-  const u = DB[unit]; if(!u) return null;
-  if(u.exact.has(code)) return {recs:u.exact.get(code), by:"khớp mã"};
-  // theo đầu mã (dòng có dấu * cuối): lấy đầu mã dài nhất khớp
-  let best = -1, recs = [];
-  for(const [p, rec] of u.prefixes){
-    if(!code.startsWith(p)) continue;
-    if(p.length > best){ best = p.length; recs = [rec]; } else if(p.length === best) recs.push(rec);
-  }
-  return recs.length ? {recs, by:"đầu mã"} : null;
-}
 const esc = s => String(s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const lookup = code => DB.items.get(codeKey(code)) || null;
+// Version của nhóm POG tại đơn vị: null = nhóm chưa có trong bảng version, "" = ô trống
+function versionOf(it, u){
+  const v = DB.mat.get(norm(it.cat) + "|" + norm(it.pog)) || DB.matByPog.get(norm(it.pog));
+  return v ? (v[u] || "") : null;
+}
 
-function recHtml(r, i, n){
+function itemHtml(it, u, unit, i, n){
+  const ver = versionOf(it, u), sold = it.sold[u];
   const chips = [];
-  if(r.tang) chips.push(`<div class="chip"><small>Tầng</small>${esc(r.tang)}</div>`);
-  if(r.stt)  chips.push(`<div class="chip"><small>Số thứ tự</small>${esc(r.stt)}</div>`);
-  const info = [["Version", r.version], ["Tên nhóm POG", r.pog], ["Vùng", r.vung]].concat(r.extras);
+  if(DB.hasMatrix) chips.push(`<div class="chip"><small>Version</small>${ver ? esc(ver) : "—"}</div>`);
+  if(it.tang) chips.push(`<div class="chip"><small>Tầng</small>${esc(it.tang)}</div>`);
+  if(it.stt)  chips.push(`<div class="chip"><small>Số thứ tự</small>${esc(it.stt)}</div>`);
+  let note = "";
+  if(DB.hasMatrix && ver === null) note = "Nhóm POG này chưa có trong bảng version.";
+  else if(DB.hasMatrix && ver === "") note = "Đơn vị này chưa có version cho nhóm POG này.";
+  const mid = (label, v) => v ? `<div class="mid"><small>${label}</small>${esc(v)}</div>` : "";
+  const info = [["Danh mục", it.cat]].concat(it.extras).filter(x => x[1]);
   return `<div class="rec">` +
-    (n > 1 ? `<div class="recno">Vị trí ${i+1}/${n}</div>` : "") +
-    (r.sku   ? `<div class="big"><small>Mã hàng</small>${esc(r.sku)}</div>` : "") +
-    (r.vitri ? `<div class="big"><small>Vị trí</small>${esc(r.vitri)}</div>` : "") +
+    (n > 1 ? `<div class="recno">Dòng ${i+1}/${n}</div>` : "") +
+    (sold === true ? `<div class="stat yes">✔ Có bán tại ${esc(unit)}</div>` : sold === false ? `<div class="stat no">✖ Không bán tại ${esc(unit)}</div>` : "") +
+    (it.name ? `<div class="name">${esc(it.name)}</div>` : "") +
     (chips.length ? `<div class="chips">${chips.join("")}</div>` : "") +
-    info.filter(x => x[1]).map(([k,v]) => `<div class="extra"><b>${esc(k)}:</b> ${esc(v)}</div>`).join("") +
+    (note ? `<div class="note">${note}</div>` : "") +
+    mid("Mã hàng", it.sku) + mid("Nhóm POG", it.pog) + mid("Vị trí", it.vitri) +
+    info.map(([k,v]) => `<div class="extra"><b>${esc(k)}:</b> ${esc(v)}</div>`).join("") +
   `</div>`;
 }
-function summary(recs){
-  const r = recs[0];
-  const t = [r.vitri, r.tang ? "Tầng " + r.tang : "", r.stt ? "STT " + r.stt : ""].filter(Boolean).join(" · ") || r.sku || "Có";
-  return recs.length > 1 ? `${t} (+${recs.length - 1})` : t;
+function summary(items, u){
+  const it = items[0], ver = versionOf(it, u), sold = it.sold[u];
+  const t = [sold === false ? "Không bán" : "", ver ? "V " + ver : "", it.tang ? "Tầng " + it.tang : "", it.stt ? "STT " + it.stt : ""].filter(Boolean).join(" · ");
+  return t || it.sku || it.name || "Có";
 }
 
 function doLookup(code){
   code = String(code||"").trim();
   if(!code) return;
-  const unit = $("unit").value;
-  const hit = lookup(unit, code);
+  const u = parseInt($("unit").value, 10), unit = DB.units[u] || "";
+  const hit = lookup(code);
   const box = $("result");
-  box.classList.remove("hidden","ok","bad");
+  box.classList.remove("hidden","ok","bad","warn");
   if(hit){
-    box.classList.add("ok");
-    const n = hit.recs.length;
+    box.classList.add(hit.every(it => it.sold[u] === false) ? "warn" : "ok");
     box.innerHTML = `<div class="code">${esc(code)} • ${esc(unit)}</div>` +
-      (n > 1 ? `<div class="multi">Mã này có ${n} vị trí trưng bày</div>` : "") +
-      hit.recs.map((r,i) => recHtml(r, i, n)).join("");
+      (hit.length > 1 ? `<div class="multi">Mã này có ${hit.length} dòng trong dữ liệu</div>` : "") +
+      hit.map((it, i) => itemHtml(it, u, unit, i, hit.length)).join("");
     if(navigator.vibrate) navigator.vibrate(60);
   }else{
     box.classList.add("bad");
     box.innerHTML = `<div class="code">${esc(code)} • ${esc(unit)}</div><div class="bad-msg">Không tìm thấy mã này</div>`+
-      `<div class="extra">Kiểm tra lại đơn vị đã chọn hoặc dữ liệu Excel.</div>`;
+      `<div class="extra">Mã chưa có trong danh sách hàng. Kiểm tra lại mã hoặc dữ liệu Excel.</div>`;
     if(navigator.vibrate) navigator.vibrate([80,60,80]);
   }
-  history.unshift({code, unit, text: hit ? summary(hit.recs) : "Không có", ok:!!hit});
+  history.unshift({code, unit, text: hit ? summary(hit, u) : "Không có", ok:!!hit});
   if(history.length>20) history.pop();
   renderHist();
   $("code").value = "";
@@ -410,30 +473,28 @@ $("file").onchange = async e => {
   const f = e.target.files[0]; if(!f) return;
   try{
     const wb = XLSX.read(await f.arrayBuffer(), {type:"array"});
-    const raw = parseWorkbook(wb);
-    if(!Object.keys(raw).length) throw new Error("File không có dữ liệu");
-    setData(raw, "file " + f.name);
-  }catch(err){ alert("Không đọc được file: "+err.message); }
+    setData(parseWorkbook(wb), "file " + f.name);
+  }catch(err){ alert("Không đọc được file: " + err.message); }
 };
 
 /* ===== Khởi động: data.xlsx trên server → bộ nhớ máy → dữ liệu mẫu ===== */
 async function init(){
-  let loaded = false;
+  let loaded = false, err = "";
   try{
-    const r = await fetch("data.xlsx?t="+Date.now(), {cache:"no-store"});
+    const r = await fetch("data.xlsx?t=" + Date.now(), {cache:"no-store"});
     if(r.ok){
       const wb = XLSX.read(await r.arrayBuffer(), {type:"array"});
-      const raw = parseWorkbook(wb);
-      if(Object.keys(raw).length){ setData(raw, "data.xlsx trên server"); loaded = true; }
+      setData(parseWorkbook(wb), "data.xlsx trên server"); loaded = true;
     }
-  }catch(e){}
+  }catch(e){ err = (e && e.message) || String(e); }
   if(!loaded){
     try{
-      const s = JSON.parse(localStorage.getItem(LS_KEY)||"null");
-      if(s){ DB = build(s.raw); META = s.meta; renderUnits(); renderInfo(); META.source += " (đã lưu trên máy)"; renderInfo(); loaded = true; }
+      const s = JSON.parse(localStorage.getItem(LS_KEY) || "null");
+      if(s){ DB = build(s.p); META = s.meta; META.source += " (đã lưu trên máy)"; renderUnits(); renderInfo(); loaded = true; }
     }catch(e){}
   }
   if(!loaded){ DB = build(SAMPLE); META = {updated:"-", source:"dữ liệu mẫu"}; renderUnits(); renderInfo(); }
+  if(err) $("status").textContent += " • ⚠ Lỗi đọc data.xlsx: " + err;
 }
 init();
 setTimeout(() => getDetector().catch(()=>{}), 800); // nạp sẵn bộ dò để lần quét đầu nhanh
